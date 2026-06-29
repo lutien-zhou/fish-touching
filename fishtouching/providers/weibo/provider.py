@@ -177,12 +177,20 @@ class WeiboProvider(Provider):
         return out
 
     # ---------- 发送 ----------
+    @staticmethod
+    def _resp_id(resp):
+        if isinstance(resp, dict):
+            mid = resp.get("id") or resp.get("idstr") or resp.get("mid")
+            return str(mid) if mid is not None else None
+        return None
+
     def send_text(self, text):
         form = {
             "text": text, "uid": self._conv_id, "is_encoded": "0", "decodetime": "1",
             "extensions": json.dumps({"clientid": self._clientid()}), "source": self.source,
         }
-        self._post(f"{BASE}/new.json", form)
+        resp = self._post(f"{BASE}/new.json", form)
+        return Message(id=self._resp_id(resp), outgoing=True, text=text)
 
     def _upload(self, path):
         import os
@@ -214,4 +222,5 @@ class WeiboProvider(Provider):
             "fids": fid, "text": "分享图片", "uid": self._conv_id, "media_type": "1",
             "extensions": json.dumps({"clientid": self._clientid()}), "source": self.source,
         }
-        self._post(f"{BASE}/new.json", form)
+        resp = self._post(f"{BASE}/new.json", form)
+        return Message(id=self._resp_id(resp), outgoing=True, image_ref=str(fid))
