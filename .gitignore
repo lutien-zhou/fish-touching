@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.venv/
+venv/
+.idea/
+.vscode/
+build/
+dist/
+*.egg-info/
+# 本地凭证/配置（绝不应提交）
+.fish-touching/
+*cookie*
+*.token
