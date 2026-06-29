@@ -112,9 +112,18 @@ def login():
     if not alt:
         return None
     d = _exchange(op, alt)
-    cookie = "; ".join(f"{c.name}={c.value}" for c in jar)
+    # 再访问一下 weibo.com，确保 .weibo.com 域的 cookie 落入 jar
+    try:
+        _get(op, "https://weibo.com/")
+    except Exception:
+        pass
+    # 关键：只取「发往 api.weibo.com 时浏览器实际会带」的 cookie，
+    # 由 cookiejar 按域/路径精确挑选并去重，避免把 sina.com.cn 的同名 cookie 混进来。
+    probe = urllib.request.Request("https://api.weibo.com/webim/2/direct_messages/contacts.json")
+    jar.add_cookie_header(probe)
+    cookie = probe.get_header("Cookie") or ""
     if "SUB=" not in cookie:
-        print("⚠️ 未拿到 SUB cookie，登录可能失败。原始 cookie：", cookie[:200])
+        print("⚠️ 未拿到有效 SUB cookie，登录可能失败。原始 cookie：", cookie[:200])
         return None
     my_uid = str(d.get("uid") or "")
     return cookie, my_uid
