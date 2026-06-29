@@ -28,6 +28,7 @@ class WeiboProvider(Provider):
     name = "weibo"
     display_name = "微博私信"
     can_send_image = True
+    can_quote = True
 
     def __init__(self):
         self.store = Store("weibo")
@@ -36,6 +37,7 @@ class WeiboProvider(Provider):
         self.poll_interval = int(cfg.get("poll_sec", 5))
         self.my_uid = str(cfg.get("my_uid", ""))
         self._conv_id = str(cfg.get("peer_uid", "")) or None
+        self._peer_name = cfg.get("peer_name") or None
         self.cookie = self.store.read_secret("cookie") or ""
 
     # ---------- HTTP ----------
@@ -107,14 +109,19 @@ class WeiboProvider(Provider):
                 out.append(Conversation(id=uid, name=name, badge=c.get("unread_count", 0)))
         return out
 
-    def set_conversation(self, conv_id):
+    def set_conversation(self, conv_id, name=None):
         self._conv_id = str(conv_id)
-        self.store.update(peer_uid=self._conv_id)
+        if name:
+            self._peer_name = name
+            self.store.update(peer_uid=self._conv_id, peer_name=name)
+        else:
+            self.store.update(peer_uid=self._conv_id)
 
     # ---------- 图片引用 ----------
     def _image_url(self, fid):
-        return (f"https://upload.api.weibo.com/2/mss/msget_thumbnail?fid={fid}"
-                f"&high=2000&width=2000&size=2000,2000&source={self.source}&imageType=origin")
+        # 用 msget 取原图：msget_thumbnail 带 size 方框会把怪比例（很长/很扁）的图裁切，
+        # msget 返回完整原图，不受方框限制。
+        return f"https://upload.api.weibo.com/2/mss/msget?fid={fid}&source={self.source}"
 
     def resolve_image(self, ref):
         req = urllib.request.Request(self._image_url(ref),
@@ -191,6 +198,15 @@ class WeiboProvider(Provider):
         }
         resp = self._post(f"{BASE}/new.json", form)
         return Message(id=self._resp_id(resp), outgoing=True, text=text)
+
+    @staticmethod
+    def build_reply(quoted_sender, quoted_text, reply):
+        # 微博网页版「引用」本质是把被引内容拼进正文：
+        #   「@对方名:被引内容」
+        #   - - - … -   （15 个 -，空格分隔）
+        #   你的回复
+        sep = " ".join("-" * 15)
+        return f"「@{quoted_sender}:{quoted_text}」\n{sep}\n{reply}"
 
     def _upload(self, path):
         import os
