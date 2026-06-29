@@ -15,6 +15,7 @@ class Provider(ABC):
     name: str = "base"              # 唯一标识，如 "weibo"
     display_name: str = "Base"      # 展示名
     can_send_image: bool = False    # 是否支持发图
+    can_quote: bool = False         # 是否支持引用/回复
     poll_interval: int = 5          # 轮询间隔（秒）
 
     # —— 登录态 ——
@@ -32,13 +33,18 @@ class Provider(ABC):
         """列出可选的会话/联系人。"""
 
     @abstractmethod
-    def set_conversation(self, conv_id: str) -> None:
-        """设置当前活跃会话。"""
+    def set_conversation(self, conv_id: str, name: Optional[str] = None) -> None:
+        """设置当前活跃会话；name 是对方展示名（用于拼引用，可不传）。"""
 
     @property
     def conversation_id(self) -> Optional[str]:
         """当前活跃会话 id（没有则 None）。"""
         return getattr(self, "_conv_id", None)
+
+    @property
+    def peer_name(self) -> Optional[str]:
+        """当前会话对方的展示名（拼引用时用），没有则 None。"""
+        return getattr(self, "_peer_name", None)
 
     # —— 消息收发 ——
     @abstractmethod
@@ -52,6 +58,14 @@ class Provider(ABC):
     def send_image(self, path: str) -> Optional[Message]:
         """发送图片（可选能力，can_send_image=True 时实现）。返回刚发出的 Message 或 None。"""
         raise NotImplementedError
+
+    def build_reply(self, quoted_sender: str, quoted_text: str, reply: str) -> str:
+        """把「引用某条消息的回复」拼成最终要发送的文本。
+
+        各平台引用格式不同，由 provider 自己拼（can_quote=True 时覆盖）。
+        默认不支持引用，直接返回回复正文。core 仍会照常 send_text 发出去。
+        """
+        return reply
 
     def resolve_image(self, ref: str) -> Tuple[bytes, str]:
         """把图片引用解析成 (二进制数据, content_type)，供本地预览代理使用。"""
