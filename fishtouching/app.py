@@ -28,6 +28,7 @@ class App:
         self.port = None
         self._first = True
         self.pending = collections.deque(maxlen=50)   # 乐观回显的待确认发送 (text, ts)
+        self.recv_log = collections.deque(maxlen=10)  # 最近收到的消息（供 /r 引用回复）
 
     # ---------- 消息 ----------
     def add_line(self, kind, text):
@@ -72,6 +73,8 @@ class App:
             fresh = fresh[-6:]      # 首次只显示最近几条历史
             self._first = False
         for m in fresh:
+            if not m.outgoing:
+                self.recv_log.append(m)
             self.add_line("sent" if m.outgoing else "recv", self._display(m))
 
     def poller(self):
@@ -111,6 +114,34 @@ class App:
                     self.add_line("sys", f"已在浏览器打开 图片#{idx}")
                 else:
                     self.add_line("sys", f"没有 图片#{idx}（共 {len(self.img_refs)} 张）")
+            return True
+        if text == "/r" or text.startswith("/r "):
+            if not self.provider.can_quote:
+                self.add_line("sys", f"{self.provider.display_name} 不支持引用回复")
+                return True
+            if not self.recv_log:
+                self.add_line("sys", "还没有可引用的消息")
+                return True
+            arg = text[2:].strip()
+            if not arg:
+                # 不带内容：列出最近几条带序号，看着选
+                self._list_recent()
+                return True
+            # 首个 token 是数字 → 当作序号（1=最新），否则默认引用最新一条
+            parts = arg.split(None, 1)
+            if parts[0].isdigit():
+                idx = int(parts[0])
+                body = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                idx, body = 1, arg
+            if not body:
+                self.add_line("sys", "用法：/r 序号 回复内容（先 /r 看列表）")
+                return True
+            quoted = self._recent(idx)
+            if quoted is None:
+                self.add_line("sys", f"没有第 {idx} 条（共 {len(self.recv_log)} 条可引用，/r 看列表）")
+                return True
+            self._send_reply(quoted, body)
             return True
         if text.startswith("/img "):
             self._send_image(text[len("/img "):].strip())
@@ -161,6 +192,37 @@ class App:
                 self.add_line("sys", f"[send failed] {e}")
         threading.Thread(target=_do, daemon=True).start()
 
+    def _recent(self, idx):
+        """取倒数第 idx 条收到的消息（1=最新）。越界返回 None。"""
+        if 1 <= idx <= len(self.recv_log):
+            return self.recv_log[-idx]
+        return None
+
+    def _list_recent(self, n=5):
+        """列出最近 n 条收到的消息，带序号（1=最新），供 /r 序号 选用。"""
+        self.add_line("sys", "最近可引用的消息（用 /r 序号 内容 回复）：")
+        for i in range(1, min(n, len(self.recv_log)) + 1):
+            m = self.recv_log[-i]
+            t = "[图片]" if m.image_ref else m.text
+            self.add_line("sys", f"  {i}. {_short(t, 30)}")
+
+    def _send_reply(self, quoted, body):
+        # 引用回复：实际发出的是带引用块的多行文本，但本地只回显成单行
+        qtext = "[图片]" if quoted.image_ref else quoted.text
+        sender = self.provider.peer_name or "对方"
+        wire = self.provider.build_reply(sender, qtext, body)
+        self.add_line("sent", f"[回复:{_short(qtext)}] {body}")
+        self.pending.append((wire, time.time()))   # 兜底去重；主去重靠返回的 id
+
+        def _do():
+            try:
+                msg = self.provider.send_text(wire)
+                if msg is not None and msg.id is not None:
+                    self.seen.add(msg.id)
+            except Exception as e:
+                self.add_line("sys", f"[reply failed] {e}")
+        threading.Thread(target=_do, daemon=True).start()
+
     # ---------- 服务 ----------
     def start_services(self):
         self.port = proxy.start_proxy(self.resolve_image)
@@ -171,6 +233,7 @@ class App:
         self.seen = set()
         self.img_refs = []
         self._first = True
+        self.recv_log.clear()
         with self.lock:
             self.lines.clear()
 
@@ -296,6 +359,11 @@ def _dwidth(s):
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
+def _short(s, n=24):
+    s = (s or "").replace("\n", " ").strip()
+    return s[:n] + "…" if len(s) > n else s
+
+
 def _clipboard_to_file():
     """macOS：把剪贴板图片存成临时 PNG，返回路径或 None。"""
     import sys
@@ -362,7 +430,7 @@ def _pick_conversation(provider):
         s = input("输入序号 > ").strip()
         if s.isdigit() and 1 <= int(s) <= len(convs):
             c = convs[int(s) - 1]
-            provider.set_conversation(c.id)
+            provider.set_conversation(c.id, c.name)
             print(f"已选择：{c.name}")
             return True
         print("序号无效，重输。")
