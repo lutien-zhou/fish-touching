@@ -46,11 +46,11 @@ class Provider(ABC):
         """拉取当前会话最近的消息（含已读过的，core 会按 id 去重）。"""
 
     @abstractmethod
-    def send_text(self, text: str) -> None:
-        """发送文字。"""
+    def send_text(self, text: str) -> Optional[Message]:
+        """发送文字。返回刚发出的 Message（带 id，供 core 立即回显并去重），拿不到则返回 None。"""
 
-    def send_image(self, path: str) -> None:
-        """发送图片（可选能力，can_send_image=True 时实现）。"""
+    def send_image(self, path: str) -> Optional[Message]:
+        """发送图片（可选能力，can_send_image=True 时实现）。返回刚发出的 Message 或 None。"""
         raise NotImplementedError
 
     def resolve_image(self, ref: str) -> Tuple[bytes, str]:
