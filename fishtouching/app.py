@@ -27,6 +27,7 @@ class App:
         self.status = "starting..."
         self.port = None
         self._first = True
+        self.pending = collections.deque(maxlen=50)   # 乐观回显的待确认发送 (text, ts)
 
     # ---------- 消息 ----------
     def add_line(self, kind, text):
@@ -47,12 +48,25 @@ class App:
             s += msg.text
         return s
 
+    def _claim_pending(self, m):
+        """若该条是自己刚乐观回显过的消息，认领并返回 True（避免轮询重复显示）。"""
+        if not m.outgoing or m.image_ref:
+            return False
+        now = time.time()
+        for i, (text, ts) in enumerate(self.pending):
+            if text == m.text and now - ts < 30:
+                del self.pending[i]
+                return True
+        return False
+
     def ingest(self, messages):
         fresh = []
         for m in messages:
             if m.id is None or m.id in self.seen:
                 continue
             self.seen.add(m.id)
+            if self._claim_pending(m):
+                continue
             fresh.append(m)
         if self._first:
             fresh = fresh[-6:]      # 首次只显示最近几条历史
@@ -110,6 +124,15 @@ class App:
             return True
         return False
 
+    def _echo(self, msg, fallback_text):
+        """把刚发出的消息立即显示出来，并记 id 去重（避免轮询又显示一遍）。"""
+        if msg is not None:
+            if msg.id is not None:
+                self.seen.add(msg.id)
+            self.add_line("sent", self._display(msg))
+        else:
+            self.add_line("sent", fallback_text)
+
     def _send_image(self, path):
         if not self.provider.can_send_image:
             self.add_line("sys", f"{self.provider.display_name} 不支持发图")
@@ -119,15 +142,21 @@ class App:
 
         def _do():
             try:
-                self.provider.send_image(path)
+                self._echo(self.provider.send_image(path), "[图片]")
             except Exception as e:
                 self.add_line("sys", f"[send image failed] {e}")
         threading.Thread(target=_do, daemon=True).start()
 
     def _send_text(self, text):
+        # 乐观回显：立刻显示，后台再发；用 (text, ts) 让轮询去重
+        self.add_line("sent", text)
+        self.pending.append((text, time.time()))
+
         def _do():
             try:
-                self.provider.send_text(text)
+                msg = self.provider.send_text(text)
+                if msg is not None and msg.id is not None:
+                    self.seen.add(msg.id)
             except Exception as e:
                 self.add_line("sys", f"[send failed] {e}")
         threading.Thread(target=_do, daemon=True).start()
